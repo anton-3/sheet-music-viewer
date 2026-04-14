@@ -1,0 +1,1 @@
+- zoom with two finger pinch (tap with two fingers to reset to default zoom)
