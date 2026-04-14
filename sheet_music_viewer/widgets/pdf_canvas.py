@@ -4,8 +4,8 @@ from dataclasses import dataclass
 from math import hypot
 from time import monotonic
 
-from PyQt6.QtCore import QEvent, QPointF, QRectF, QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QKeyEvent, QMouseEvent, QPainter, QPaintEvent, QPen, QTouchEvent
+from PyQt6.QtCore import QEvent, QPointF, QRectF, QSize, Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QColor, QImage, QKeyEvent, QMouseEvent, QPainter, QPaintEvent, QPen, QTouchEvent
 from PyQt6.QtWidgets import QWidget
 
 from sheet_music_viewer.pdf_document import PdfDocument
@@ -19,6 +19,7 @@ PINCH_SCALE_SLOP = 0.03
 TWO_FINGER_TAP_MAX_DURATION = 0.35
 MIN_ZOOM_FACTOR = 0.3
 MAX_ZOOM_FACTOR = 6.0
+HIGH_RES_RERENDER_DELAY_MS = 120
 
 
 @dataclass(frozen=True)
@@ -53,6 +54,11 @@ class PdfCanvas(QWidget):
         self._two_finger_tap_started_at = 0.0
         self._two_finger_start_positions: dict[int, QPointF] = {}
         self._ignore_mouse_until = 0.0
+        self._interactive_rendering = False
+        self._last_rendered_images: dict[int, QImage] = {}
+        self._high_res_timer = QTimer(self)
+        self._high_res_timer.setSingleShot(True)
+        self._high_res_timer.timeout.connect(self._finish_interactive_rendering)
 
     def set_document(self, document: PdfDocument) -> None:
         self._document = document
@@ -60,6 +66,9 @@ class PdfCanvas(QWidget):
         self._rotation = 0
         self._zoom_factor = 1.0
         self._pan_offset = QPointF()
+        self._interactive_rendering = False
+        self._last_rendered_images = {}
+        self._high_res_timer.stop()
         self.update()
 
     def clear_document(self) -> None:
@@ -68,6 +77,9 @@ class PdfCanvas(QWidget):
         self._rotation = 0
         self._zoom_factor = 1.0
         self._pan_offset = QPointF()
+        self._interactive_rendering = False
+        self._last_rendered_images = {}
+        self._high_res_timer.stop()
         self.update()
 
     def set_page_index(self, page_index: int) -> None:
@@ -75,6 +87,8 @@ class PdfCanvas(QWidget):
             return
         self._page_index = max(0, min(page_index, self._max_page_index()))
         self._pan_offset = QPointF()
+        self._interactive_rendering = False
+        self._high_res_timer.stop()
         self.update()
 
     def page_index(self) -> int:
@@ -92,11 +106,15 @@ class PdfCanvas(QWidget):
     def rotate_clockwise(self) -> None:
         self._rotation = (self._rotation + 90) % 360
         self._pan_offset = QPointF()
+        self._interactive_rendering = False
+        self._high_res_timer.stop()
         self.update()
 
     def rotate_counterclockwise(self) -> None:
         self._rotation = (self._rotation - 90) % 360
         self._pan_offset = QPointF()
+        self._interactive_rendering = False
+        self._high_res_timer.stop()
         self.update()
 
     def reset_zoom(self) -> None:
@@ -154,6 +172,7 @@ class PdfCanvas(QWidget):
     def paintEvent(self, event: QPaintEvent) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
         painter.fillRect(self.rect(), QColor("#121212"))
 
         if not self._document:
@@ -174,8 +193,7 @@ class PdfCanvas(QWidget):
         )
         placements = self._page_placements(viewport)
         for placement in placements:
-            target_size = placement.rect.size().toSize()
-            image = self._document.render_page(placement.page_index, target_size)
+            image = self._page_image_for_paint(placement)
             painter.drawImage(placement.rect, image)
 
         self._draw_page_borders(painter, placements)
@@ -261,6 +279,18 @@ class PdfCanvas(QWidget):
         for placement in placements:
             painter.drawRect(placement.rect)
         painter.restore()
+
+    def _page_image_for_paint(self, placement: PagePlacement) -> QImage:
+        assert self._document is not None
+        if self._interactive_rendering:
+            cached = self._last_rendered_images.get(placement.page_index)
+            if cached is not None and not cached.isNull():
+                return cached
+
+        target_size = placement.rect.size().toSize()
+        image = self._document.render_page(placement.page_index, target_size)
+        self._last_rendered_images[placement.page_index] = image
+        return image
 
     def _handle_pointer_gesture(self, start: QPointF, end: QPointF) -> None:
         delta_x = end.x() - start.x()
@@ -357,12 +387,16 @@ class PdfCanvas(QWidget):
                 self.reset_zoom()
             elif self._single_touch_press_pos is not None and self._single_touch_last_pos is not None:
                 self._handle_pointer_gesture(self._single_touch_press_pos, self._single_touch_last_pos)
+            if self._interactive_rendering:
+                self._schedule_high_res_rerender()
             self._reset_touch_state()
             touch_event.accept()
 
     def _begin_multi_touch(self, points: list[QTouchEvent.TouchPoint]) -> None:
         self._single_touch_press_pos = None
         self._single_touch_last_pos = None
+        self._interactive_rendering = True
+        self._high_res_timer.stop()
         self._pinch_start_distance = self._touch_distance(points)
         self._pinch_start_zoom = self._zoom_factor
         self._pinch_start_center = self._touch_center(points)
@@ -403,6 +437,7 @@ class PdfCanvas(QWidget):
             self._zoom_factor = next_zoom
             self._pan_offset = next_pan
             self.update()
+            self._schedule_high_res_rerender()
 
         if abs(scale_delta - 1.0) > PINCH_SCALE_SLOP:
             self._two_finger_tap_candidate = False
@@ -430,6 +465,14 @@ class PdfCanvas(QWidget):
 
     def _two_finger_tap_within_threshold(self) -> bool:
         return monotonic() - self._two_finger_tap_started_at <= TWO_FINGER_TAP_MAX_DURATION
+
+    def _schedule_high_res_rerender(self) -> None:
+        self._interactive_rendering = True
+        self._high_res_timer.start(HIGH_RES_RERENDER_DELAY_MS)
+
+    def _finish_interactive_rendering(self) -> None:
+        self._interactive_rendering = False
+        self.update()
 
     def _reset_touch_state(self) -> None:
         self._touch_session_active = False
