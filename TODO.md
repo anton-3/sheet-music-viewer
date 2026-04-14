@@ -1,1 +1,3 @@
 - zoom with two finger pinch (tap with two fingers to reset to default zoom)
+- file/folder editing operations? create folder, delete, import pdf, etc?
+- eventually want a way to quickly download sheets from imslp by just entering the title (imslp api + local nlp or something?)
