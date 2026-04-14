@@ -1,0 +1,7 @@
+[project]
+name = "sheet-music-viewer"
+version = "0.1.0"
+description = "anton's sheet music viewer"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
