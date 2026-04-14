@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import QPoint, Qt, pyqtSignal
+from PyQt6.QtGui import QMouseEvent
 from PyQt6.QtWidgets import (
+    QAbstractItemView,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -12,12 +14,53 @@ from PyQt6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QScroller,
     QVBoxLayout,
     QWidget,
 )
 
 from sheet_music_viewer.library import LibraryItem, list_library_items
 from sheet_music_viewer.settings import AppSettings
+
+
+TAP_DRAG_THRESHOLD = 18
+
+
+class LibraryListWidget(QListWidget):
+    item_tapped = pyqtSignal(QListWidgetItem)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._press_pos: QPoint | None = None
+        self._dragging = False
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._press_pos = event.position().toPoint()
+            self._dragging = False
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        if self._press_pos is not None:
+            distance = (event.position().toPoint() - self._press_pos).manhattanLength()
+            if distance > TAP_DRAG_THRESHOLD:
+                self._dragging = True
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton and self._press_pos is not None:
+            distance = (event.position().toPoint() - self._press_pos).manhattanLength()
+            should_activate = not self._dragging and distance <= TAP_DRAG_THRESHOLD
+            item = self.itemAt(event.position().toPoint()) if should_activate else None
+            self._press_pos = None
+            self._dragging = False
+            super().mouseReleaseEvent(event)
+            if item is not None:
+                self.item_tapped.emit(item)
+            return
+        self._press_pos = None
+        self._dragging = False
+        super().mouseReleaseEvent(event)
 
 
 class HomeWindow(QMainWindow):
@@ -56,8 +99,10 @@ class HomeWindow(QMainWindow):
         header_layout.addWidget(self.change_root_button)
         header_layout.addWidget(self.path_label, stretch=1)
 
-        self.list_widget = QListWidget()
+        self.list_widget = LibraryListWidget()
+        self._configure_library_list()
         self.list_widget.itemActivated.connect(self._activate_item)
+        self.list_widget.item_tapped.connect(self._activate_item)
 
         container = QWidget()
         layout = QVBoxLayout(container)
@@ -66,6 +111,24 @@ class HomeWindow(QMainWindow):
         layout.addLayout(header_layout)
         layout.addWidget(self.list_widget)
         self.setCentralWidget(container)
+
+    def _configure_library_list(self) -> None:
+        self.list_widget.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self.list_widget.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self.list_widget.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.list_widget.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.list_widget.setAutoScroll(False)
+        self.list_widget.setUniformItemSizes(False)
+        self.list_widget.setSpacing(2)
+
+        QScroller.grabGesture(
+            self.list_widget.viewport(),
+            QScroller.ScrollerGestureType.LeftMouseButtonGesture,
+        )
+        QScroller.grabGesture(
+            self.list_widget.viewport(),
+            QScroller.ScrollerGestureType.TouchGesture,
+        )
 
     def _apply_styles(self) -> None:
         self.setStyleSheet(
