@@ -265,7 +265,6 @@ class PdfCanvas(QWidget):
     def _handle_pointer_gesture(self, start: QPointF, end: QPointF) -> None:
         delta_x = end.x() - start.x()
         delta_y = end.y() - start.y()
-        horizontal_third = self.width() / 3
 
         if delta_y >= SWIPE_CLOSE_DISTANCE and abs(delta_y) > abs(delta_x):
             self.close_requested.emit()
@@ -279,10 +278,44 @@ class PdfCanvas(QWidget):
             return
 
         if abs(delta_x) <= TAP_SLOP and abs(delta_y) <= TAP_SLOP:
-            if end.x() < horizontal_third:
-                self.navigate_requested.emit(-self.spread_size())
-            elif end.x() >= horizontal_third * 2:
-                self.navigate_requested.emit(self.spread_size())
+            navigation_delta = self._tap_navigation_delta(end)
+            if navigation_delta != 0:
+                self.navigate_requested.emit(navigation_delta)
+
+    def _tap_navigation_delta(self, point: QPointF) -> int:
+        spread_size = self.spread_size()
+        if spread_size == 1:
+            left_zone = self.width() * 0.4
+            right_zone = self.width() * 0.6
+            if point.x() < left_zone:
+                return -1
+            if point.x() >= right_zone:
+                return 1
+            return 0
+
+        if not self._document:
+            return 0
+
+        logical_size = self._logical_viewport_size()
+        if logical_size.width() <= 0 or logical_size.height() <= 0:
+            return 0
+
+        viewport = QRectF(
+            -logical_size.width() / 2,
+            -logical_size.height() / 2,
+            logical_size.width(),
+            logical_size.height(),
+        )
+        placements = self._page_placements(viewport)
+        logical_point = self._to_logical_point(point)
+
+        for index, placement in enumerate(placements):
+            if placement.rect.contains(logical_point):
+                if index == 0:
+                    return -spread_size
+                return spread_size
+
+        return 0
 
     def _handle_touch_event(self, event: QEvent) -> None:
         touch_event = event
