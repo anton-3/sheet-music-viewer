@@ -6,6 +6,8 @@ from PyQt6.QtCore import QPoint, Qt, pyqtSignal
 from PyQt6.QtGui import QMouseEvent
 from PyQt6.QtWidgets import (
     QAbstractItemView,
+    QDialog,
+    QDialogButtonBox,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -15,6 +17,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScroller,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -73,6 +76,63 @@ class LibraryListWidget(QListWidget):
         super().mouseReleaseEvent(event)
 
 
+class SettingsDialog(QDialog):
+    def __init__(self, current_root: Path | None, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._selected_root: Path | None = current_root
+
+        self.setWindowTitle("Settings")
+        self.setModal(True)
+        self.setMinimumWidth(520)
+
+        self.root_value_label = QLabel(self._format_root(current_root))
+        self.root_value_label.setWordWrap(True)
+
+        change_root_button = QPushButton("Change Root Folder")
+        change_root_button.clicked.connect(self._choose_root_directory)
+
+        root_row = QHBoxLayout()
+        root_row.setSpacing(12)
+        root_row.addWidget(self.root_value_label, stretch=1)
+        root_row.addWidget(change_root_button, stretch=0)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, parent=self)
+        buttons.rejected.connect(self.reject)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(18)
+        layout.addLayout(root_row)
+        layout.addStretch(1)
+        layout.addWidget(buttons)
+
+    def selected_root_directory(self) -> Path | None:
+        return self._selected_root
+
+    def _choose_root_directory(self) -> None:
+        default_text = str(self._selected_root) if self._selected_root else "~/Documents"
+        while True:
+            typed_path, accepted = QInputDialog.getText(
+                self,
+                "Set Library Root",
+                "Enter the folder path containing your sheet music PDFs:",
+                text=default_text,
+            )
+            if not accepted:
+                return
+
+            candidate = Path(typed_path).expanduser()
+            if candidate.exists() and candidate.is_dir():
+                self._selected_root = candidate.resolve()
+                self.root_value_label.setText(self._format_root(self._selected_root))
+                return
+
+            QMessageBox.warning(self, "Invalid Folder", f"'{candidate}' is not a readable directory.")
+
+    def _format_root(self, path: Path | None) -> str:
+        return str(path) if path else "Not configured"
+
+
 class HomeWindow(QMainWindow):
     pdf_requested = pyqtSignal(object)
 
@@ -97,17 +157,20 @@ class HomeWindow(QMainWindow):
     def _build_ui(self) -> None:
         self.path_label = QLabel("No library selected")
         self.path_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.path_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
 
         self.back_button = QPushButton("Back")
         self.back_button.clicked.connect(self._go_back)
 
-        self.change_root_button = QPushButton("Set Root")
-        self.change_root_button.clicked.connect(self._choose_root_directory)
+        self.settings_button = QPushButton("\u2699")
+        self.settings_button.setObjectName("settingsButton")
+        self.settings_button.setToolTip("Settings")
+        self.settings_button.clicked.connect(self._open_settings_dialog)
 
         header_layout = QHBoxLayout()
         header_layout.addWidget(self.back_button)
-        header_layout.addWidget(self.change_root_button)
         header_layout.addWidget(self.path_label, stretch=1)
+        header_layout.addWidget(self.settings_button)
 
         self.list_widget = LibraryListWidget()
         self._configure_library_list()
@@ -155,9 +218,22 @@ class HomeWindow(QMainWindow):
                 padding: 10px 16px;
                 min-width: 100px;
             }
+            QPushButton#settingsButton {
+                font-size: 22px;
+                min-width: 52px;
+                max-width: 52px;
+                padding: 8px;
+            }
             QPushButton:disabled {
                 color: #7d7d7d;
                 background: #dcdcdc;
+            }
+            QDialog {
+                background: #efefef;
+                color: #1c1c1c;
+            }
+            QLabel#settingsHintLabel {
+                color: #666666;
             }
             QListWidget {
                 background: #f4f4f4;
@@ -180,26 +256,39 @@ class HomeWindow(QMainWindow):
         if stored_root:
             self._set_root_directory(stored_root)
             return
-        self._choose_root_directory()
+        if root_directory := self._prompt_for_root_directory():
+            self.settings.set_root_directory(root_directory)
+            self._set_root_directory(root_directory)
 
-    def _choose_root_directory(self) -> None:
+    def _prompt_for_root_directory(self, initial_path: Path | None = None) -> Path | None:
+        default_text = str(initial_path) if initial_path else "~/Documents"
         while True:
             typed_path, accepted = QInputDialog.getText(
                 self,
                 "Set Library Root",
                 "Enter the folder path containing your sheet music PDFs:",
-                text="~/Documents",
+                text=default_text,
             )
             if not accepted:
-                return
+                return None
 
             candidate = Path(typed_path).expanduser()
             if candidate.exists() and candidate.is_dir():
-                self.settings.set_root_directory(candidate)
-                self._set_root_directory(candidate)
-                return
+                return candidate.resolve()
 
             QMessageBox.warning(self, "Invalid Folder", f"'{candidate}' is not a readable directory.")
+
+    def _open_settings_dialog(self) -> None:
+        dialog = SettingsDialog(self._root_directory, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted and dialog.selected_root_directory() == self._root_directory:
+            return
+
+        new_root = dialog.selected_root_directory()
+        if new_root is None or new_root == self._root_directory:
+            return
+
+        self.settings.set_root_directory(new_root)
+        self._set_root_directory(new_root)
 
     def _set_root_directory(self, root_directory: Path) -> None:
         self._root_directory = root_directory.resolve()
