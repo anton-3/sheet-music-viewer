@@ -1,3 +1,6 @@
 - zoom with two finger pinch (tap with two fingers to reset to default zoom)
+- settings page. gear button in top right, remove the "Set Root" button and put that as an option in the settings page instead
+- star a pdf
 - file/folder editing operations? create folder, delete, import pdf, etc?
 - eventually want a way to quickly download sheets from imslp by just entering the title (imslp api + local nlp or something?)
+- auto page turning by listening to your mic and doing some funky audio processing along with processing the pdf sheet music content
