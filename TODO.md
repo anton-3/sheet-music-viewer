@@ -1,6 +1,8 @@
 - zoom with two finger pinch (tap with two fingers to reset to default zoom)
 - settings page. gear button in top right, remove the "Set Root" button and put that as an option in the settings page instead
 - star a pdf
+- long press to enter edit mode, lets you markup the pdf
 - file/folder editing operations? create folder, delete, import pdf, etc?
 - eventually want a way to quickly download sheets from imslp by just entering the title (imslp api + local nlp or something?)
+- process local PDFs with document processing/image models or something and determine what songs they are, who wrote them, etc. and then use that for more advanced filtering/search/categorization features or something
 - auto page turning by listening to your mic and doing some funky audio processing along with processing the pdf sheet music content
