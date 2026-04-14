@@ -24,10 +24,12 @@ from sheet_music_viewer.settings import AppSettings
 
 
 TAP_DRAG_THRESHOLD = 18
+BACK_SWIPE_DISTANCE = 90
 
 
 class LibraryListWidget(QListWidget):
     item_tapped = pyqtSignal(QListWidgetItem)
+    back_swiped = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -49,12 +51,20 @@ class LibraryListWidget(QListWidget):
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton and self._press_pos is not None:
-            distance = (event.position().toPoint() - self._press_pos).manhattanLength()
+            delta = event.position().toPoint() - self._press_pos
+            distance = delta.manhattanLength()
             should_activate = not self._dragging and distance <= TAP_DRAG_THRESHOLD
+            should_go_back = (
+                delta.x() >= BACK_SWIPE_DISTANCE
+                and abs(delta.x()) > abs(delta.y())
+            )
             item = self.itemAt(event.position().toPoint()) if should_activate else None
             self._press_pos = None
             self._dragging = False
             super().mouseReleaseEvent(event)
+            if should_go_back:
+                self.back_swiped.emit()
+                return
             if item is not None:
                 self.item_tapped.emit(item)
             return
@@ -103,6 +113,7 @@ class HomeWindow(QMainWindow):
         self._configure_library_list()
         self.list_widget.itemActivated.connect(self._activate_item)
         self.list_widget.item_tapped.connect(self._activate_item)
+        self.list_widget.back_swiped.connect(self._go_back)
 
         container = QWidget()
         layout = QVBoxLayout(container)

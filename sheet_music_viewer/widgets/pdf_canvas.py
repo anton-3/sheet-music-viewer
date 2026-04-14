@@ -48,11 +48,17 @@ class PdfCanvas(QWidget):
     def set_page_index(self, page_index: int) -> None:
         if not self._document:
             return
-        self._page_index = max(0, min(page_index, self._document.page_count - 1))
+        self._page_index = max(0, min(page_index, self._max_page_index()))
         self.update()
 
     def page_index(self) -> int:
         return self._page_index
+
+    def _max_page_index(self) -> int:
+        assert self._document is not None
+        if self.spread_size() == 2 and self._document.page_count % 2 == 0:
+            return max(0, self._document.page_count - 2)
+        return self._document.page_count - 1
 
     def spread_size(self) -> int:
         return 1 if self.height() > self.width() else 2
