@@ -27,6 +27,8 @@ uv run python main.py
 - Landscape mode: two-page spread
 - Outer left/right tap zones for page navigation
 - Downward swipe to close the PDF and return to the library
+- Two-finger pinch to zoom in and out while viewing a PDF
+- Two-finger tap to reset zoom to the fitted default view
 - Even-page PDFs stop correctly on the final two-page spread
 - `r` and `Shift+R` for visual rotation
 - `Escape` to return to the library
