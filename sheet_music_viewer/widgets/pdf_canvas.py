@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from PyQt6.QtCore import QPointF, QRectF, QSize, Qt, pyqtSignal
+from PyQt6.QtCore import QRectF, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QKeyEvent, QMouseEvent, QPainter, QPaintEvent, QPen
 from PyQt6.QtWidgets import QWidget
 
@@ -163,7 +163,7 @@ class PdfCanvas(QWidget):
         scale = min(bounds.width() / source_width, bounds.height() / source_height)
         width = source_width * scale
         height = source_height * scale
-        return QRectF(QPointF(0, 0), QSize(int(width), int(height)))
+        return QRectF(0.0, 0.0, width, height)
 
     def _draw_page_borders(self, painter: QPainter, placements: list[PagePlacement]) -> None:
         painter.save()
