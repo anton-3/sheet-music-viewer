@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from PyQt6.QtCore import QRectF, QSize, Qt, pyqtSignal
+from PyQt6.QtCore import QPointF, QRectF, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QKeyEvent, QMouseEvent, QPainter, QPaintEvent, QPen
 from PyQt6.QtWidgets import QWidget
 
@@ -10,6 +10,8 @@ from sheet_music_viewer.pdf_document import PdfDocument
 
 
 PAGE_GAP = 24.0
+TAP_SLOP = 24.0
+SWIPE_CLOSE_DISTANCE = 90.0
 
 
 @dataclass(frozen=True)
@@ -20,6 +22,7 @@ class PagePlacement:
 
 class PdfCanvas(QWidget):
     navigate_requested = pyqtSignal(int)
+    close_requested = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -28,6 +31,7 @@ class PdfCanvas(QWidget):
         self._document: PdfDocument | None = None
         self._page_index = 0
         self._rotation = 0
+        self._pointer_press_pos: QPointF | None = None
 
     def set_document(self, document: PdfDocument) -> None:
         self._document = document
@@ -73,9 +77,37 @@ class PdfCanvas(QWidget):
         super().keyPressEvent(event)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
-        midpoint = self.width() / 2
-        delta = self.spread_size() if event.position().x() >= midpoint else -self.spread_size()
-        self.navigate_requested.emit(delta)
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._pointer_press_pos = event.position()
+        event.accept()
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        if event.button() != Qt.MouseButton.LeftButton or self._pointer_press_pos is None:
+            super().mouseReleaseEvent(event)
+            return
+
+        start = self._pointer_press_pos
+        end = event.position()
+        self._pointer_press_pos = None
+
+        delta_x = end.x() - start.x()
+        delta_y = end.y() - start.y()
+        horizontal_third = self.width() / 3
+
+        if (
+            delta_y >= SWIPE_CLOSE_DISTANCE
+            and abs(delta_y) > abs(delta_x)
+        ):
+            self.close_requested.emit()
+            event.accept()
+            return
+
+        if abs(delta_x) <= TAP_SLOP and abs(delta_y) <= TAP_SLOP:
+            if end.x() < horizontal_third:
+                self.navigate_requested.emit(-self.spread_size())
+            elif end.x() >= horizontal_third * 2:
+                self.navigate_requested.emit(self.spread_size())
+
         event.accept()
 
     def paintEvent(self, event: QPaintEvent) -> None:

@@ -114,7 +114,7 @@ class HomeWindow(QMainWindow):
                 self,
                 "Set Library Root",
                 "Enter the folder path containing your sheet music PDFs:",
-                text="~/Documents/sheets",
+                text="~/Documents",
             )
             if not accepted:
                 return

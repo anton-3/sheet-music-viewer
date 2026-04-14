@@ -22,6 +22,7 @@ class ViewerWindow(QWidget):
         self._document: PdfDocument | None = None
         self.canvas = PdfCanvas(self)
         self.canvas.navigate_requested.connect(self._navigate)
+        self.canvas.close_requested.connect(self.close_pdf)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
