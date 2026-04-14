@@ -1,4 +1,4 @@
-from sheet_music_viewer.app import main
+from .app import main
 
 
 if __name__ == "__main__":
