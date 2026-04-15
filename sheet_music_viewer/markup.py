@@ -18,7 +18,7 @@ class MarkupStore:
         self._pdf_path: Path | None = None
         self._strokes: list[MarkupStroke] = []
         self._undo_stack: list[tuple[str, MarkupStroke]] = []
-        self._dirty = False
+        self._saved_snapshot: list[MarkupStroke] = []
 
     def load(self, pdf_path: Path) -> None:
         self.clear()
@@ -43,7 +43,7 @@ class MarkupStore:
                 self._strokes.append(stroke)
             except (KeyError, TypeError, ValueError, IndexError):
                 continue
-        self._dirty = False
+        self._saved_snapshot = list(self._strokes)
 
     def save(self) -> bool:
         sidecar = self._sidecar_path()
@@ -62,19 +62,18 @@ class MarkupStore:
             sidecar.write_text(json.dumps(data), encoding="utf-8")
         except OSError:
             return False
-        self._dirty = False
+        self._saved_snapshot = list(self._strokes)
         return True
 
     def clear(self) -> None:
         self._pdf_path = None
         self._strokes.clear()
         self._undo_stack.clear()
-        self._dirty = False
+        self._saved_snapshot.clear()
 
     def add_stroke(self, stroke: MarkupStroke) -> None:
         self._strokes.append(stroke)
         self._undo_stack.append(("draw", stroke))
-        self._dirty = True
 
     def remove_stroke(self, stroke: MarkupStroke) -> None:
         try:
@@ -82,7 +81,6 @@ class MarkupStore:
         except ValueError:
             return
         self._undo_stack.append(("erase", stroke))
-        self._dirty = True
 
     def undo(self) -> bool:
         if not self._undo_stack:
@@ -95,8 +93,11 @@ class MarkupStore:
                 pass
         elif action == "erase":
             self._strokes.append(stroke)
-        self._dirty = True
         return True
+
+    @property
+    def can_undo(self) -> bool:
+        return bool(self._undo_stack)
 
     def strokes_for_page(self, page_index: int) -> list[MarkupStroke]:
         return [s for s in self._strokes if s.page_index == page_index]
@@ -106,7 +107,7 @@ class MarkupStore:
 
     @property
     def has_unsaved_changes(self) -> bool:
-        return self._dirty
+        return self._strokes != self._saved_snapshot
 
     def _sidecar_path(self) -> Path | None:
         if self._pdf_path is None:

@@ -49,6 +49,7 @@ class PdfCanvas(QWidget):
     edit_mode_entered = pyqtSignal()
     edit_mode_exited = pyqtSignal()
     unsaved_changes_changed = pyqtSignal(bool)
+    undo_state_changed = pyqtSignal(bool)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -82,7 +83,7 @@ class PdfCanvas(QWidget):
 
         self._edit_mode = False
         self._erase_mode = False
-        self._pen_color = "#dc3545"
+        self._pen_color = "#000000"
         self._current_stroke_points: list[tuple[float, float]] = []
         self._current_stroke_page: int | None = None
         self._current_stroke_width: float = 0.0
@@ -158,13 +159,18 @@ class PdfCanvas(QWidget):
 
     def undo_last(self) -> None:
         if self._markup_store and self._markup_store.undo():
-            self.unsaved_changes_changed.emit(self._markup_store.has_unsaved_changes)
+            self._emit_markup_state()
             self.update()
 
     def save_markup(self) -> None:
         if self._markup_store:
             self._markup_store.save()
+            self._emit_markup_state()
+
+    def _emit_markup_state(self) -> None:
+        if self._markup_store:
             self.unsaved_changes_changed.emit(self._markup_store.has_unsaved_changes)
+            self.undo_state_changed.emit(self._markup_store.can_undo)
 
     def exit_edit_mode(self) -> None:
         self._exit_edit_mode_silent()
@@ -484,7 +490,7 @@ class PdfCanvas(QWidget):
                     break
         if best_stroke is not None:
             self._markup_store.remove_stroke(best_stroke)
-            self.unsaved_changes_changed.emit(self._markup_store.has_unsaved_changes)
+            self._emit_markup_state()
             self.update()
 
     def _page_image_for_paint(self, placement: PagePlacement) -> QImage:
@@ -668,7 +674,7 @@ class PdfCanvas(QWidget):
                 width=self._current_stroke_width,
             )
             self._markup_store.add_stroke(stroke)
-            self.unsaved_changes_changed.emit(self._markup_store.has_unsaved_changes)
+            self._emit_markup_state()
         self._current_stroke_points.clear()
         self._current_stroke_page = None
         self.update()

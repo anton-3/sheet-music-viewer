@@ -183,7 +183,7 @@ class MarkupToolbar(QWidget):
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
         self._color_buttons: list[ColorCircleButton] = []
-        self._active_color = PEN_COLORS[1]
+        self._active_color = PEN_COLORS[0]
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(_TOOLBAR_PADDING, _TOOLBAR_PADDING, _TOOLBAR_PADDING, _TOOLBAR_PADDING)
@@ -220,6 +220,9 @@ class MarkupToolbar(QWidget):
 
     def set_save_enabled(self, enabled: bool) -> None:
         self._save_btn.setEnabled(enabled)
+
+    def set_undo_enabled(self, enabled: bool) -> None:
+        self._undo_btn.setEnabled(enabled)
 
     def set_active_color(self, color: str) -> None:
         self._active_color = color

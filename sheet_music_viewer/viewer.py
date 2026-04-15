@@ -38,6 +38,7 @@ class ViewerWindow(QWidget):
         self.canvas.edit_mode_entered.connect(self._on_edit_mode_entered)
         self.canvas.edit_mode_exited.connect(self._on_edit_mode_exited)
         self.canvas.unsaved_changes_changed.connect(self._toolbar.set_save_enabled)
+        self.canvas.undo_state_changed.connect(self._toolbar.set_undo_enabled)
 
         self._toolbar.color_selected.connect(self.canvas.set_pen_color)
         self._toolbar.undo_requested.connect(self.canvas.undo_last)
@@ -94,7 +95,10 @@ class ViewerWindow(QWidget):
         self.canvas.clear_document()
 
     def _on_edit_mode_entered(self) -> None:
+        self._toolbar.set_erase_active(False)
+        self._toolbar.set_active_color(self.canvas._pen_color)
         self._toolbar.set_save_enabled(self._markup_store.has_unsaved_changes)
+        self._toolbar.set_undo_enabled(self._markup_store.can_undo)
         self._toolbar.show()
         self._toolbar.raise_()
         self._position_toolbar()
