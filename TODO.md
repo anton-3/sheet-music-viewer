@@ -1,8 +1,7 @@
-- star a pdf, view starred pdf's
 - long press to enter edit mode, lets you markup the pdf
-- file/folder editing operations? create folder, delete, import pdf, etc?
-- eventually want a way to quickly download sheets from imslp by just entering the title (imslp api + local nlp or something?)
-  - may not be realistic, or necessary, I found a ton of sheets online already
+- pdf import, either from local file or via search?
+  - eventually want a way to quickly download sheets from imslp by just entering the title (imslp api + local nlp or something?)
+  - actually ^^ this may not be realistic, or necessary, I found a ton of sheets online already
 - process local PDFs with document processing/image models or something and determine what songs they are, who wrote them, etc. and then use that for more advanced filtering/search/categorization features or something
   - index all PDFs to get necessary data, then implement voice commands (local whisper or something) to ask it jarvis-style "open rachmaninoff prelude in g minor" then it opens classical/Rachmaninov/Preludes/10 Preludes, Op 23.pdf on page 19 or whatever. no clue if this is even possible/practical ngl
 - auto page turning by listening to your mic and doing some funky audio processing along with processing the pdf sheet music content

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PyQt6.QtCore import QPoint, Qt, pyqtSignal
-from PyQt6.QtGui import QMouseEvent
+from PyQt6.QtCore import QPoint, QSize, Qt, pyqtSignal
+from PyQt6.QtGui import QColor, QMouseEvent, QPainter
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QDialog,
@@ -76,6 +76,61 @@ class LibraryListWidget(QListWidget):
         super().mouseReleaseEvent(event)
 
 
+class StarButton(QPushButton):
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__("", parent)
+        self.setCheckable(True)
+
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+        painter.setPen(QColor("#b18900") if self.isChecked() else QColor("#2a2a2a"))
+        font = painter.font()
+        font.setPixelSize(18)
+        font.setBold(True)
+        painter.setFont(font)
+        painter.drawText(self.rect().adjusted(0, -1, 0, -1), Qt.AlignmentFlag.AlignCenter, "\u2605")
+
+
+class LibraryRowWidget(QWidget):
+    star_toggled = pyqtSignal(Path)
+
+    def __init__(self, item: LibraryItem, starred: bool, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._item = item
+        self.setObjectName("pdfRowWidget")
+        self.setAutoFillBackground(False)
+
+        label_text = f"[DIR] {item.display_name}" if item.is_directory else item.display_name
+        self.label = QLabel(label_text)
+        self.label.setObjectName("pdfRowLabel")
+        self.label.setWordWrap(False)
+        self.label.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(10, 12, 10, 12)
+        layout.setSpacing(12)
+        layout.addWidget(self.label, stretch=1)
+
+        self.star_button: QPushButton | None = None
+        if not item.is_directory:
+            self.star_button = StarButton()
+            self.star_button.setObjectName("rowStarButton")
+            self.star_button.setChecked(starred)
+            self.star_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            self.star_button.setToolTip("Toggle starred PDF")
+            self.star_button.clicked.connect(self._emit_star_toggled)
+            layout.addWidget(self.star_button, stretch=0)
+
+    def sizeHint(self) -> QSize:
+        return QSize(0, 60)
+
+    def _emit_star_toggled(self, checked: bool) -> None:
+        del checked
+        self.star_toggled.emit(self._item.path)
+
+
 class SettingsDialog(QDialog):
     def __init__(self, current_root: Path | None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -142,6 +197,7 @@ class HomeWindow(QMainWindow):
         self._root_directory: Path | None = None
         self._current_directory: Path | None = None
         self._history: list[Path] = []
+        self._starred_mode = False
 
         self.setWindowTitle("Sheet Music Viewer")
         self.resize(1000, 700)
@@ -162,6 +218,11 @@ class HomeWindow(QMainWindow):
         self.back_button = QPushButton("Back")
         self.back_button.clicked.connect(self._go_back)
 
+        self.starred_view_button = StarButton()
+        self.starred_view_button.setObjectName("starButton")
+        self.starred_view_button.setToolTip("Show starred PDFs")
+        self.starred_view_button.clicked.connect(self._toggle_starred_view)
+
         self.settings_button = QPushButton("\u2699")
         self.settings_button.setObjectName("settingsButton")
         self.settings_button.setToolTip("Settings")
@@ -170,6 +231,7 @@ class HomeWindow(QMainWindow):
         header_layout = QHBoxLayout()
         header_layout.addWidget(self.back_button)
         header_layout.addWidget(self.path_label, stretch=1)
+        header_layout.addWidget(self.starred_view_button)
         header_layout.addWidget(self.settings_button)
 
         self.list_widget = LibraryListWidget()
@@ -224,6 +286,36 @@ class HomeWindow(QMainWindow):
                 max-width: 52px;
                 padding: 8px;
             }
+            QPushButton#starButton {
+                font-size: 22px;
+                min-width: 52px;
+                max-width: 52px;
+                padding: 8px;
+                color: #2a2a2a;
+                background: #d3d3d3;
+            }
+            QPushButton#starButton:checked {
+                color: #b18900;
+                background: #e1d19a;
+            }
+            QPushButton#rowStarButton {
+                font-size: 18px;
+                min-width: 36px;
+                max-width: 36px;
+                min-height: 36px;
+                max-height: 36px;
+                padding: 0;
+                color: #2a2a2a;
+                background: #d3d3d3;
+            }
+            QPushButton#rowStarButton:checked {
+                color: #b18900;
+                background: #e1d19a;
+            }
+            QWidget#pdfRowWidget,
+            QLabel#pdfRowLabel {
+                background: transparent;
+            }
             QPushButton:disabled {
                 color: #7d7d7d;
                 background: #dcdcdc;
@@ -241,7 +333,7 @@ class HomeWindow(QMainWindow):
                 outline: none;
             }
             QListWidget::item {
-                padding: 14px 10px;
+                padding: 0;
                 border-bottom: 1px solid #d6d6d6;
             }
             QListWidget::item:selected {
@@ -293,41 +385,47 @@ class HomeWindow(QMainWindow):
     def _set_root_directory(self, root_directory: Path) -> None:
         self._root_directory = root_directory.resolve()
         self._history.clear()
+        self._starred_mode = False
+        self.starred_view_button.setChecked(False)
         self._navigate_to(self._root_directory)
 
     def _navigate_to(self, directory: Path) -> None:
         self._current_directory = directory
-        self.path_label.setText(str(directory))
-        self.back_button.setEnabled(bool(self._root_directory and directory != self._root_directory))
+        self._refresh_header()
         self._reload_list()
 
     def _reload_list(self) -> None:
-        assert self._current_directory is not None
         self.list_widget.clear()
-
-        try:
-            items = list_library_items(self._current_directory)
-        except OSError as exc:
-            QMessageBox.warning(self, "Folder Error", f"Could not read '{self._current_directory}': {exc}")
-            items = []
+        items = self._current_items()
 
         if not items:
-            empty = QListWidgetItem("This folder has no PDFs or subfolders.")
+            message = (
+                "No starred PDFs yet."
+                if self._starred_mode
+                else "This folder has no PDFs or subfolders."
+            )
+            empty = QListWidgetItem(message)
             empty.setFlags(Qt.ItemFlag.NoItemFlags)
             self.list_widget.addItem(empty)
             return
 
+        starred_paths = self.settings.get_starred_pdfs()
         for item in items:
-            label = f"[DIR] {item.display_name}" if item.is_directory else item.display_name
-            widget_item = QListWidgetItem(label)
+            widget_item = QListWidgetItem()
             widget_item.setData(Qt.ItemDataRole.UserRole, item)
+            row_widget = LibraryRowWidget(item, item.path in starred_paths, self.list_widget)
+            row_widget.star_toggled.connect(self._toggle_pdf_star)
+            widget_item.setSizeHint(row_widget.sizeHint())
             self.list_widget.addItem(widget_item)
+            self.list_widget.setItemWidget(widget_item, row_widget)
 
     def _activate_item(self, widget_item: QListWidgetItem) -> None:
         item = widget_item.data(Qt.ItemDataRole.UserRole)
         if not isinstance(item, LibraryItem):
             return
         if item.is_directory:
+            if self._starred_mode:
+                return
             assert self._current_directory is not None
             self._history.append(self._current_directory)
             self._navigate_to(item.path)
@@ -335,7 +433,55 @@ class HomeWindow(QMainWindow):
         self.pdf_requested.emit(item.path)
 
     def _go_back(self) -> None:
+        if self._starred_mode:
+            return
         if not self._history:
             return
         previous = self._history.pop()
         self._navigate_to(previous)
+
+    def _toggle_starred_view(self) -> None:
+        self._starred_mode = self.starred_view_button.isChecked()
+        self._refresh_header()
+        self._reload_list()
+
+    def _toggle_pdf_star(self, path: Path) -> None:
+        self.settings.toggle_pdf_star(path)
+        self._reload_list()
+
+    def _refresh_header(self) -> None:
+        if self._starred_mode:
+            self.path_label.setText("Starred Sheet Music")
+            self.back_button.setEnabled(False)
+            return
+
+        directory = self._current_directory
+        self.path_label.setText(str(directory) if directory else "No library selected")
+        self.back_button.setEnabled(bool(self._root_directory and directory and directory != self._root_directory))
+
+    def _current_items(self) -> list[LibraryItem]:
+        if self._starred_mode:
+            return self._starred_items()
+
+        assert self._current_directory is not None
+        try:
+            return list_library_items(self._current_directory)
+        except OSError as exc:
+            QMessageBox.warning(self, "Folder Error", f"Could not read '{self._current_directory}': {exc}")
+            return []
+
+    def _starred_items(self) -> list[LibraryItem]:
+        if not self._root_directory:
+            return []
+
+        root_directory = self._root_directory.resolve()
+        starred_paths = sorted(self.settings.get_starred_pdfs(), key=lambda path: path.name.lower())
+        items: list[LibraryItem] = []
+        for path in starred_paths:
+            try:
+                resolved = path.resolve()
+                resolved.relative_to(root_directory)
+            except (OSError, ValueError):
+                continue
+            items.append(LibraryItem(path=resolved, is_directory=False))
+        return items
