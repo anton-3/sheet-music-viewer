@@ -13,12 +13,14 @@ from PyQt6.QtGui import (
     QKeyEvent,
     QMouseEvent,
     QPainter,
+    QPainterPath,
     QPaintEvent,
     QPen,
     QTouchEvent,
 )
 from PyQt6.QtWidgets import QWidget
 
+from sheet_music_viewer.markup import MarkupStore, MarkupStroke
 from sheet_music_viewer.pdf_document import PdfDocument
 
 
@@ -31,6 +33,8 @@ TWO_FINGER_TAP_MAX_DURATION = 0.35
 MIN_ZOOM_FACTOR = 0.3
 MAX_ZOOM_FACTOR = 6.0
 HIGH_RES_RERENDER_DELAY_MS = 120
+LONG_PRESS_MS = 1000
+PEN_SCREEN_WIDTH = 3.0
 
 
 @dataclass(frozen=True)
@@ -42,6 +46,9 @@ class PagePlacement:
 class PdfCanvas(QWidget):
     navigate_requested = pyqtSignal(int)
     close_requested = pyqtSignal()
+    edit_mode_entered = pyqtSignal()
+    edit_mode_exited = pyqtSignal()
+    unsaved_changes_changed = pyqtSignal(bool)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -73,6 +80,19 @@ class PdfCanvas(QWidget):
         self._command_mode = False
         self._command_buffer = ""
 
+        self._edit_mode = False
+        self._erase_mode = False
+        self._pen_color = "#dc3545"
+        self._current_stroke_points: list[tuple[float, float]] = []
+        self._current_stroke_page: int | None = None
+        self._current_stroke_width: float = 0.0
+        self._markup_store: MarkupStore | None = None
+        self._long_press_timer = QTimer(self)
+        self._long_press_timer.setSingleShot(True)
+        self._long_press_timer.setInterval(LONG_PRESS_MS)
+        self._long_press_timer.timeout.connect(self._on_long_press)
+        self._suppress_current_touch = False
+
     def set_document(self, document: PdfDocument) -> None:
         self._document = document
         self._page_index = 0
@@ -95,7 +115,15 @@ class PdfCanvas(QWidget):
         self._last_rendered_images = {}
         self._high_res_timer.stop()
         self._exit_command_mode()
+        self._exit_edit_mode_silent()
         self.update()
+
+    def set_markup_store(self, store: MarkupStore) -> None:
+        self._markup_store = store
+        self.update()
+
+    def edit_mode_active(self) -> bool:
+        return self._edit_mode
 
     def set_page_index(self, page_index: int) -> None:
         if not self._document:
@@ -120,6 +148,41 @@ class PdfCanvas(QWidget):
 
     def command_mode_active(self) -> bool:
         return self._command_mode
+
+    def set_pen_color(self, color: str) -> None:
+        self._pen_color = color
+        self._erase_mode = False
+
+    def set_erase_mode(self, active: bool) -> None:
+        self._erase_mode = active
+
+    def undo_last(self) -> None:
+        if self._markup_store and self._markup_store.undo():
+            self.unsaved_changes_changed.emit(self._markup_store.has_unsaved_changes)
+            self.update()
+
+    def save_markup(self) -> None:
+        if self._markup_store:
+            self._markup_store.save()
+            self.unsaved_changes_changed.emit(self._markup_store.has_unsaved_changes)
+
+    def exit_edit_mode(self) -> None:
+        self._exit_edit_mode_silent()
+        self.edit_mode_exited.emit()
+        self.update()
+
+    def _exit_edit_mode_silent(self) -> None:
+        self._edit_mode = False
+        self._erase_mode = False
+        self._current_stroke_points.clear()
+        self._current_stroke_page = None
+        self._long_press_timer.stop()
+
+    def _on_long_press(self) -> None:
+        self._edit_mode = True
+        self._suppress_current_touch = True
+        self.edit_mode_entered.emit()
+        self.update()
 
     def rotate_clockwise(self) -> None:
         self._rotation = (self._rotation + 90) % 360
@@ -225,7 +288,7 @@ class PdfCanvas(QWidget):
         self.draw_overlays(painter, placements)
 
     def draw_overlays(self, painter: QPainter, placements: list[PagePlacement]) -> None:
-        del placements
+        self._draw_markup_strokes(painter, placements)
         if self._command_mode:
             self._draw_command_overlay(painter)
 
@@ -306,6 +369,124 @@ class PdfCanvas(QWidget):
             painter.drawRect(placement.rect)
         painter.restore()
 
+    def _screen_to_pdf_coords(self, screen_point: QPointF) -> tuple[int, float, float] | None:
+        if not self._document:
+            return None
+        logical_size = self._logical_viewport_size()
+        if logical_size.width() <= 0 or logical_size.height() <= 0:
+            return None
+        viewport = QRectF(
+            -logical_size.width() / 2, -logical_size.height() / 2,
+            logical_size.width(), logical_size.height(),
+        )
+        base_placements = self._base_page_placements(viewport)
+        logical = self._to_logical_point(screen_point)
+        base = QPointF(
+            (logical.x() - self._pan_offset.x()) / self._zoom_factor,
+            (logical.y() - self._pan_offset.y()) / self._zoom_factor,
+        )
+        for bp in base_placements:
+            if bp.rect.contains(base):
+                pdf_w, pdf_h = self._document.page_size(bp.page_index)
+                pdf_x = (base.x() - bp.rect.left()) / bp.rect.width() * pdf_w
+                pdf_y = (base.y() - bp.rect.top()) / bp.rect.height() * pdf_h
+                return (bp.page_index, pdf_x, pdf_y)
+        return None
+
+    def _screen_width_to_pdf(self, screen_width: float, page_index: int) -> float:
+        if not self._document:
+            return screen_width
+        logical_size = self._logical_viewport_size()
+        if logical_size.width() <= 0 or logical_size.height() <= 0:
+            return screen_width
+        viewport = QRectF(
+            -logical_size.width() / 2, -logical_size.height() / 2,
+            logical_size.width(), logical_size.height(),
+        )
+        for bp in self._base_page_placements(viewport):
+            if bp.page_index == page_index:
+                pdf_w, _ = self._document.page_size(page_index)
+                page_scale = bp.rect.width() / pdf_w
+                return screen_width / (self._zoom_factor * page_scale)
+        return screen_width
+
+    def _pdf_to_placement_point(
+        self, pdf_x: float, pdf_y: float, page_index: int, placement: PagePlacement,
+    ) -> QPointF:
+        assert self._document is not None
+        pdf_w, pdf_h = self._document.page_size(page_index)
+        return QPointF(
+            placement.rect.left() + (pdf_x / pdf_w) * placement.rect.width(),
+            placement.rect.top() + (pdf_y / pdf_h) * placement.rect.height(),
+        )
+
+    def _draw_markup_strokes(self, painter: QPainter, placements: list[PagePlacement]) -> None:
+        if not self._markup_store or not self._document:
+            return
+        painter.save()
+        for placement in placements:
+            page_idx = placement.page_index
+            pdf_w, _ = self._document.page_size(page_idx)
+            for stroke in self._markup_store.strokes_for_page(page_idx):
+                self._paint_stroke(painter, stroke, placement, pdf_w)
+            if (
+                self._current_stroke_page == page_idx
+                and len(self._current_stroke_points) >= 2
+            ):
+                in_progress = MarkupStroke(
+                    page_index=page_idx,
+                    points=list(self._current_stroke_points),
+                    color=self._pen_color,
+                    width=self._current_stroke_width,
+                )
+                self._paint_stroke(painter, in_progress, placement, pdf_w)
+        painter.restore()
+
+    def _paint_stroke(
+        self, painter: QPainter, stroke: MarkupStroke,
+        placement: PagePlacement, pdf_w: float,
+    ) -> None:
+        if len(stroke.points) < 2:
+            return
+        screen_width = stroke.width * (placement.rect.width() / pdf_w)
+        pen = QPen(QColor(stroke.color), screen_width)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        path = QPainterPath()
+        p0 = self._pdf_to_placement_point(
+            stroke.points[0][0], stroke.points[0][1], stroke.page_index, placement,
+        )
+        path.moveTo(p0)
+        for pt in stroke.points[1:]:
+            p = self._pdf_to_placement_point(pt[0], pt[1], stroke.page_index, placement)
+            path.lineTo(p)
+        painter.drawPath(path)
+
+    def _erase_stroke_at(self, page_index: int, pdf_x: float, pdf_y: float) -> None:
+        if not self._markup_store:
+            return
+        strokes = self._markup_store.strokes_for_page(page_index)
+        best_stroke: MarkupStroke | None = None
+        best_dist = float("inf")
+        for stroke in strokes:
+            threshold = stroke.width * 3 + 5.0
+            for i in range(len(stroke.points) - 1):
+                d = _point_to_segment_distance(
+                    pdf_x, pdf_y,
+                    stroke.points[i][0], stroke.points[i][1],
+                    stroke.points[i + 1][0], stroke.points[i + 1][1],
+                )
+                if d < threshold and d < best_dist:
+                    best_dist = d
+                    best_stroke = stroke
+                    break
+        if best_stroke is not None:
+            self._markup_store.remove_stroke(best_stroke)
+            self.unsaved_changes_changed.emit(self._markup_store.has_unsaved_changes)
+            self.update()
+
     def _page_image_for_paint(self, placement: PagePlacement) -> QImage:
         assert self._document is not None
         if self._interactive_rendering:
@@ -378,6 +559,8 @@ class PdfCanvas(QWidget):
         assert isinstance(touch_event, QTouchEvent)
 
         if touch_event.type() == QEvent.Type.TouchCancel:
+            self._long_press_timer.stop()
+            self._discard_in_progress_stroke()
             self._reset_touch_state()
             touch_event.accept()
             return
@@ -387,21 +570,42 @@ class PdfCanvas(QWidget):
 
         if touch_event.type() == QEvent.Type.TouchBegin:
             self._touch_session_active = True
+            self._suppress_current_touch = False
             if point_count == 1:
                 self._single_touch_press_pos = points[0].position()
                 self._single_touch_last_pos = points[0].position()
+                if not self._edit_mode:
+                    self._long_press_timer.start()
+                elif not self._erase_mode:
+                    self._begin_stroke(points[0].position())
             else:
                 self._single_touch_press_pos = None
                 self._single_touch_last_pos = None
+                self._long_press_timer.stop()
             if point_count >= 2:
+                self._long_press_timer.stop()
+                self._discard_in_progress_stroke()
                 self._begin_multi_touch(points)
             touch_event.accept()
             return
 
         if touch_event.type() == QEvent.Type.TouchUpdate:
+            if self._suppress_current_touch:
+                touch_event.accept()
+                return
             if point_count == 1:
                 self._single_touch_last_pos = points[0].position()
+                if not self._edit_mode:
+                    if self._single_touch_press_pos is not None:
+                        dx = points[0].position().x() - self._single_touch_press_pos.x()
+                        dy = points[0].position().y() - self._single_touch_press_pos.y()
+                        if hypot(dx, dy) > TAP_SLOP:
+                            self._long_press_timer.stop()
+                elif not self._erase_mode:
+                    self._continue_stroke(points[0].position())
             if point_count >= 2:
+                self._long_press_timer.stop()
+                self._discard_in_progress_stroke()
                 if self._pinch_start_distance is None:
                     self._begin_multi_touch(points)
                 self._update_pinch(points)
@@ -409,14 +613,78 @@ class PdfCanvas(QWidget):
             return
 
         if touch_event.type() == QEvent.Type.TouchEnd:
+            self._long_press_timer.stop()
+            if self._suppress_current_touch:
+                self._suppress_current_touch = False
+                self._reset_touch_state()
+                touch_event.accept()
+                return
             if self._two_finger_tap_candidate and self._two_finger_tap_within_threshold():
                 self.reset_zoom()
+            elif self._edit_mode:
+                if self._erase_mode:
+                    if self._single_touch_last_pos is not None:
+                        self._handle_erase_tap(self._single_touch_last_pos)
+                else:
+                    self._finish_stroke()
             elif self._single_touch_press_pos is not None and self._single_touch_last_pos is not None:
                 self._handle_pointer_gesture(self._single_touch_press_pos, self._single_touch_last_pos)
             if self._interactive_rendering:
                 self._schedule_high_res_rerender()
             self._reset_touch_state()
             touch_event.accept()
+
+    def _begin_stroke(self, screen_pos: QPointF) -> None:
+        result = self._screen_to_pdf_coords(screen_pos)
+        if result is None:
+            return
+        page_idx, pdf_x, pdf_y = result
+        self._current_stroke_page = page_idx
+        self._current_stroke_width = self._screen_width_to_pdf(PEN_SCREEN_WIDTH, page_idx)
+        self._current_stroke_points = [(pdf_x, pdf_y)]
+
+    def _continue_stroke(self, screen_pos: QPointF) -> None:
+        if self._current_stroke_page is None:
+            return
+        result = self._screen_to_pdf_coords(screen_pos)
+        if result is None:
+            return
+        page_idx, pdf_x, pdf_y = result
+        if page_idx != self._current_stroke_page:
+            return
+        self._current_stroke_points.append((pdf_x, pdf_y))
+        self.update()
+
+    def _finish_stroke(self) -> None:
+        if (
+            self._current_stroke_page is not None
+            and len(self._current_stroke_points) >= 2
+            and self._markup_store is not None
+        ):
+            stroke = MarkupStroke(
+                page_index=self._current_stroke_page,
+                points=list(self._current_stroke_points),
+                color=self._pen_color,
+                width=self._current_stroke_width,
+            )
+            self._markup_store.add_stroke(stroke)
+            self.unsaved_changes_changed.emit(self._markup_store.has_unsaved_changes)
+        self._current_stroke_points.clear()
+        self._current_stroke_page = None
+        self.update()
+
+    def _discard_in_progress_stroke(self) -> None:
+        if self._current_stroke_page is not None:
+            self._current_stroke_points.clear()
+            self._current_stroke_page = None
+            self.update()
+
+    def _handle_erase_tap(self, screen_pos: QPointF) -> None:
+        result = self._screen_to_pdf_coords(screen_pos)
+        if result is None:
+            return
+        page_idx, pdf_x, pdf_y = result
+        self._erase_stroke_at(page_idx, pdf_x, pdf_y)
 
     def _begin_multi_touch(self, points: list[QTouchEvent.TouchPoint]) -> None:
         self._single_touch_press_pos = None
@@ -595,6 +863,7 @@ class PdfCanvas(QWidget):
         self._two_finger_tap_candidate = False
         self._two_finger_tap_started_at = 0.0
         self._two_finger_start_positions = {}
+        self._suppress_current_touch = False
 
     def _should_ignore_mouse(self) -> bool:
         return self._touch_session_active or monotonic() < self._ignore_mouse_until
@@ -608,3 +877,16 @@ class PdfCanvas(QWidget):
         if self._rotation == 270:
             return QPointF(-centered.y(), centered.x())
         return centered
+
+
+def _point_to_segment_distance(
+    px: float, py: float, ax: float, ay: float, bx: float, by: float,
+) -> float:
+    dx, dy = bx - ax, by - ay
+    len_sq = dx * dx + dy * dy
+    if len_sq == 0:
+        return hypot(px - ax, py - ay)
+    t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / len_sq))
+    proj_x = ax + t * dx
+    proj_y = ay + t * dy
+    return hypot(px - proj_x, py - proj_y)
