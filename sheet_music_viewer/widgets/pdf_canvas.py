@@ -582,7 +582,9 @@ class PdfCanvas(QWidget):
                 self._single_touch_last_pos = points[0].position()
                 if not self._edit_mode:
                     self._long_press_timer.start()
-                elif not self._erase_mode:
+                elif self._erase_mode:
+                    self._handle_erase_at(points[0].position())
+                else:
                     self._begin_stroke(points[0].position())
             else:
                 self._single_touch_press_pos = None
@@ -607,7 +609,9 @@ class PdfCanvas(QWidget):
                         dy = points[0].position().y() - self._single_touch_press_pos.y()
                         if hypot(dx, dy) > TAP_SLOP:
                             self._long_press_timer.stop()
-                elif not self._erase_mode:
+                elif self._erase_mode:
+                    self._handle_erase_at(points[0].position())
+                else:
                     self._continue_stroke(points[0].position())
             if point_count >= 2:
                 self._long_press_timer.stop()
@@ -628,10 +632,7 @@ class PdfCanvas(QWidget):
             if self._two_finger_tap_candidate and self._two_finger_tap_within_threshold():
                 self.reset_zoom()
             elif self._edit_mode:
-                if self._erase_mode:
-                    if self._single_touch_last_pos is not None:
-                        self._handle_erase_tap(self._single_touch_last_pos)
-                else:
+                if not self._erase_mode:
                     self._finish_stroke()
             elif self._single_touch_press_pos is not None and self._single_touch_last_pos is not None:
                 self._handle_pointer_gesture(self._single_touch_press_pos, self._single_touch_last_pos)
@@ -685,7 +686,7 @@ class PdfCanvas(QWidget):
             self._current_stroke_page = None
             self.update()
 
-    def _handle_erase_tap(self, screen_pos: QPointF) -> None:
+    def _handle_erase_at(self, screen_pos: QPointF) -> None:
         result = self._screen_to_pdf_coords(screen_pos)
         if result is None:
             return
