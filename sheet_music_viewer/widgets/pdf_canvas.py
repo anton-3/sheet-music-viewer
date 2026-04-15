@@ -5,7 +5,18 @@ from math import hypot
 from time import monotonic
 
 from PyQt6.QtCore import QEvent, QPointF, QRectF, QSize, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor, QImage, QKeyEvent, QMouseEvent, QPainter, QPaintEvent, QPen, QTouchEvent
+from PyQt6.QtGui import (
+    QColor,
+    QFont,
+    QFontMetrics,
+    QImage,
+    QKeyEvent,
+    QMouseEvent,
+    QPainter,
+    QPaintEvent,
+    QPen,
+    QTouchEvent,
+)
 from PyQt6.QtWidgets import QWidget
 
 from sheet_music_viewer.pdf_document import PdfDocument
@@ -59,6 +70,8 @@ class PdfCanvas(QWidget):
         self._high_res_timer = QTimer(self)
         self._high_res_timer.setSingleShot(True)
         self._high_res_timer.timeout.connect(self._finish_interactive_rendering)
+        self._command_mode = False
+        self._command_buffer = ""
 
     def set_document(self, document: PdfDocument) -> None:
         self._document = document
@@ -69,6 +82,7 @@ class PdfCanvas(QWidget):
         self._interactive_rendering = False
         self._last_rendered_images = {}
         self._high_res_timer.stop()
+        self._exit_command_mode()
         self.update()
 
     def clear_document(self) -> None:
@@ -80,6 +94,7 @@ class PdfCanvas(QWidget):
         self._interactive_rendering = False
         self._last_rendered_images = {}
         self._high_res_timer.stop()
+        self._exit_command_mode()
         self.update()
 
     def set_page_index(self, page_index: int) -> None:
@@ -103,6 +118,9 @@ class PdfCanvas(QWidget):
     def spread_size(self) -> int:
         return 1 if self.height() > self.width() else 2
 
+    def command_mode_active(self) -> bool:
+        return self._command_mode
+
     def rotate_clockwise(self) -> None:
         self._rotation = (self._rotation + 90) % 360
         self._pan_offset = QPointF()
@@ -125,6 +143,13 @@ class PdfCanvas(QWidget):
         self.update()
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
+        if self._command_mode:
+            self._handle_command_key(event)
+            return
+        if event.text() == ":":
+            self._enter_command_mode()
+            event.accept()
+            return
         if event.key() == Qt.Key.Key_R and event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
             self.rotate_counterclockwise()
             event.accept()
@@ -200,8 +225,9 @@ class PdfCanvas(QWidget):
         self.draw_overlays(painter, placements)
 
     def draw_overlays(self, painter: QPainter, placements: list[PagePlacement]) -> None:
-        # Reserved extension point for pen or markup layers.
-        del painter, placements
+        del placements
+        if self._command_mode:
+            self._draw_command_overlay(painter)
 
     def _logical_viewport_size(self) -> QSize:
         if self._rotation in (90, 270):
@@ -473,6 +499,90 @@ class PdfCanvas(QWidget):
     def _finish_interactive_rendering(self) -> None:
         self._interactive_rendering = False
         self.update()
+
+    def jump_to_page_number(self, page_number: int) -> bool:
+        if not self._document or page_number < 1 or page_number > self._document.page_count:
+            return False
+
+        if self.spread_size() == 1:
+            target_index = page_number - 1
+        else:
+            aligned_page = page_number if page_number % 2 == 1 else page_number - 1
+            target_index = max(0, aligned_page - 1)
+
+        self.set_page_index(target_index)
+        return True
+
+    def _handle_command_key(self, event: QKeyEvent) -> None:
+        if event.key() == Qt.Key.Key_Escape:
+            self._exit_command_mode()
+            event.accept()
+            return
+
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            if self._command_buffer.isdigit():
+                self.jump_to_page_number(int(self._command_buffer))
+            self._exit_command_mode()
+            event.accept()
+            return
+
+        if event.key() == Qt.Key.Key_Backspace:
+            self._command_buffer = self._command_buffer[:-1]
+            self.update()
+            event.accept()
+            return
+
+        text = event.text()
+        if len(text) == 1 and text.isprintable():
+            self._command_buffer += text
+            self.update()
+            event.accept()
+            return
+
+        event.accept()
+
+    def _enter_command_mode(self) -> None:
+        self._command_mode = True
+        self._command_buffer = ""
+        self.update()
+
+    def _exit_command_mode(self) -> None:
+        self._command_mode = False
+        self._command_buffer = ""
+        self.update()
+
+    def _draw_command_overlay(self, painter: QPainter) -> None:
+        painter.save()
+        painter.resetTransform()
+
+        prompt = f":{self._command_buffer}"
+        is_valid = not self._command_buffer or self._command_buffer.isdigit()
+
+        font = QFont("monospace")
+        font.setStyleHint(QFont.StyleHint.TypeWriter)
+        font.setPointSize(16)
+        painter.setFont(font)
+        metrics = QFontMetrics(font)
+
+        padding_x = 18
+        padding_y = 12
+        box_width = metrics.horizontalAdvance(prompt) + padding_x * 2
+        box_height = metrics.height() + padding_y * 2
+        box_rect = QRectF(24, self.height() - box_height - 24, box_width, box_height)
+
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(18, 18, 18, 220))
+        painter.drawRoundedRect(box_rect, 10, 10)
+
+        border_color = QColor("#666666") if is_valid else QColor("#9a4a4a")
+        painter.setPen(QPen(border_color, 1))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRoundedRect(box_rect, 10, 10)
+
+        painter.setPen(QColor("#f1f1f1"))
+        baseline = box_rect.top() + padding_y + metrics.ascent()
+        painter.drawText(QPointF(box_rect.left() + padding_x, baseline), prompt)
+        painter.restore()
 
     def _reset_touch_state(self) -> None:
         self._touch_session_active = False
