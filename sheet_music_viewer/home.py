@@ -22,7 +22,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from sheet_music_viewer.library import LibraryItem, list_library_items
+from sheet_music_viewer.library import LibraryItem, list_library_items, pdf_page_count
 from sheet_music_viewer.settings import AppSettings
 
 
@@ -112,6 +112,14 @@ class LibraryRowWidget(QWidget):
         layout.setContentsMargins(10, 12, 10, 12)
         layout.setSpacing(12)
         layout.addWidget(self.label, stretch=1)
+
+        self.pages_label: QLabel | None = None
+        if not item.is_directory and item.page_count is not None:
+            self.pages_label = QLabel(f"{item.page_count} pages")
+            self.pages_label.setObjectName("pdfRowPagesLabel")
+            self.pages_label.setWordWrap(False)
+            self.pages_label.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight)
+            layout.addWidget(self.pages_label, stretch=0)
 
         self.star_button: QPushButton | None = None
         if not item.is_directory:
@@ -316,6 +324,11 @@ class HomeWindow(QMainWindow):
             QLabel#pdfRowLabel {
                 background: transparent;
             }
+            QLabel#pdfRowPagesLabel {
+                background: transparent;
+                color: #888888;
+                font-size: 13px;
+            }
             QPushButton:disabled {
                 color: #7d7d7d;
                 background: #dcdcdc;
@@ -483,5 +496,7 @@ class HomeWindow(QMainWindow):
                 resolved.relative_to(root_directory)
             except (OSError, ValueError):
                 continue
-            items.append(LibraryItem(path=resolved, is_directory=False))
+            items.append(
+                LibraryItem(path=resolved, is_directory=False, page_count=pdf_page_count(resolved)),
+            )
         return items
