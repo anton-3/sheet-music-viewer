@@ -1,7 +1,10 @@
-- long press to enter edit mode, lets you markup the pdf
 - pdf import, either from local file or via search?
   - eventually want a way to quickly download sheets from imslp by just entering the title (imslp api + local nlp or something?)
   - actually ^^ this may not be realistic, or necessary, I found a ton of sheets online already
 - process local PDFs with document processing/image models or something and determine what songs they are, who wrote them, etc. and then use that for more advanced filtering/search/categorization features or something
   - index all PDFs to get necessary data, then implement voice commands (local whisper or something) to ask it jarvis-style "open rachmaninoff prelude in g minor" then it opens classical/Rachmaninov/Preludes/10 Preludes, Op 23.pdf on page 19 or whatever. no clue if this is even possible/practical ngl
 - auto page turning by listening to your mic and doing some funky audio processing along with processing the pdf sheet music content
+  - to convert PDFs to musicXML, use homr https://github.com/liebharc/homr?tab=readme-ov-file (or maybe oemer, I think homr's better though)
+  - then merge the musicXML's from each page using relieur https://github.com/papoteur-mga/relieur
+  - then run matchmaker for real-time score alignment https://github.com/pymatchmaker/matchmaker https://arxiv.org/html/2510.10087v1
+  - TODO do more discovery for matchmaker
