@@ -23,6 +23,7 @@ uv run python sheet-music-viewer
 - Portrait mode uses left/right 40% tap zones for page navigation
 - Landscape mode uses the visible left/right page regions for page navigation
 - Left/right swipe navigation between pages or spreads
+- Left/right arrow keys or `n`/`p` keyboard navigation between pages or spreads
 - Downward swipe to close the PDF and return to the library
 - Two-finger pinch to zoom in and out while viewing a PDF
 - Two-finger tap to reset zoom to the fitted default view

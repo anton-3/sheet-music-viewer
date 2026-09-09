@@ -219,6 +219,14 @@ class PdfCanvas(QWidget):
             self._enter_command_mode()
             event.accept()
             return
+        if event.key() in (Qt.Key.Key_Left, Qt.Key.Key_P):
+            self.navigate_requested.emit(-self.spread_size())
+            event.accept()
+            return
+        if event.key() in (Qt.Key.Key_Right, Qt.Key.Key_N):
+            self.navigate_requested.emit(self.spread_size())
+            event.accept()
+            return
         if event.key() == Qt.Key.Key_R and event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
             self.rotate_counterclockwise()
             event.accept()
